@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OmniRoute tool-name cloak map — ALS survival fix</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b1220;
+    --surface: #111c30;
+    --surface-2: #16233b;
+    --border: #24344f;
+    --border-bright: #33507a;
+    --text: #e8eef7;
+    --text-dim: #93a4be;
+    --text-faint: #64748b;
+    /* blueprint deep-blue + gold */
+    --blue: #4d94ff;
+    --blue-dim: rgba(77,148,255,0.12);
+    --gold: #e0b64d;
+    --gold-dim: rgba(224,182,77,0.12);
+    --green: #4dd08a;
+    --green-dim: rgba(77,208,138,0.12);
+    --red: #e8697d;
+    --red-dim: rgba(232,105,125,0.12);
+    --primary: var(--blue);
+    --primary-dim: var(--blue-dim);
+    --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    background-image:
+      linear-gradient(var(--border) 1px, transparent 1px),
+      linear-gradient(90deg, var(--border) 1px, transparent 1px);
+    background-size: 44px 44px;
+    background-position: -1px -1px;
+    color: var(--text);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.6;
+    padding: 48px 24px 96px;
+  }
+  body::before {
+    content: "";
+    position: fixed; inset: 0;
+    background: radial-gradient(ellipse 80% 55% at 50% -8%, rgba(77,148,255,0.10), transparent 70%);
+    pointer-events: none; z-index: 0;
+  }
+
+  .container { max-width: 1120px; margin: 0 auto; position: relative; z-index: 1; }
+
+  /* ============ HERO ============ */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+    margin-bottom: 14px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .eyebrow::before {
+    content: ""; width: 26px; height: 1px; background: var(--gold);
+  }
+  h1 {
+    font-size: 40px;
+    line-height: 1.1;
+    font-weight: 600;
+    margin: 0 0 14px;
+    letter-spacing: -0.02em;
+  }
+  h1 .accent { color: var(--blue); }
+  .subtitle {
+    font-size: 17px;
+    color: var(--text-dim);
+    max-width: 780px;
+    margin: 0 0 28px;
+  }
+  .subtitle code {
+    font-family: var(--font-mono); font-size: 14px;
+    background: var(--surface-2); color: var(--gold);
+    padding: 1px 6px; border-radius: 4px;
+  }
+
+  .meta-strip {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    margin-bottom: 40px;
+  }
+  .chip {
+    font-family: var(--font-mono); font-size: 12px;
+    background: var(--surface); border: 1px solid var(--border);
+    color: var(--text-dim);
+    padding: 6px 12px; border-radius: 20px;
+    display: inline-flex; align-items: center; gap: 7px;
+  }
+  .chip b { color: var(--text); font-weight: 500; }
+  .chip .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dot.blue { background: var(--blue); }
+  .dot.gold { background: var(--gold); }
+  .dot.green { background: var(--green); }
+
+  /* ============ SECTION HEADINGS ============ */
+  section { margin-bottom: 52px; scroll-margin-top: 20px; }
+  h2 {
+    font-size: 13px; font-family: var(--font-mono);
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 0 0 20px; padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 10px;
+  }
+  h2 .num { color: var(--blue); font-weight: 600; }
+
+  /* ============ NAV ============ */
+  .toc {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin-bottom: 40px;
+    padding: 14px 16px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px;
+  }
+  .toc a {
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--text-dim); text-decoration: none;
+    padding: 5px 11px; border-radius: 7px;
+    transition: background .15s, color .15s;
+  }
+  .toc a:hover { background: var(--blue-dim); color: var(--blue); }
+
+  /* ============ THE-CHANGE (before/after) ============ */
+  .ba-grid {
+    display: grid; grid-template-columns: 1fr 44px 1fr; gap: 0;
+    align-items: stretch;
+  }
+  @media (max-width: 760px) {
+    .ba-grid { grid-template-columns: 1fr; }
+    .ba-arrow { transform: rotate(90deg); margin: 8px auto; }
+  }
+  .ba-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px; min-width: 0;
+  }
+  .ba-card.before { border-top: 3px solid var(--red); }
+  .ba-card.after { border-top: 3px solid var(--green); }
+  .ba-tag {
+    font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: 0.08em; text-transform: uppercase;
+    margin-bottom: 12px; display: inline-block;
+    padding: 3px 9px; border-radius: 5px;
+  }
+  .ba-card.before .ba-tag { background: var(--red-dim); color: var(--red); }
+  .ba-card.after .ba-tag { background: var(--green-dim); color: var(--green); }
+  .ba-card h3 { margin: 0 0 12px; font-size: 17px; font-weight: 600; }
+  .ba-card ul { margin: 0; padding-left: 18px; color: var(--text-dim); font-size: 14px; }
+  .ba-card li { margin-bottom: 7px; }
+  .ba-card code {
+    font-family: var(--font-mono); font-size: 12.5px;
+    background: var(--surface-2); color: var(--gold);
+    padding: 1px 5px; border-radius: 4px; overflow-wrap: break-word;
+  }
+  .ba-arrow {
+    display: flex; align-items: center; justify-content: center;
+    color: var(--blue); font-size: 26px; font-family: var(--font-mono);
+  }
+
+  /* ============ MERMAID ============ */
+  .diagram-shell { position: relative; }
+  .diagram-shell__hint {
+    font-family: var(--font-mono); font-size: 11px;
+    color: var(--text-faint); margin-bottom: 8px; opacity: .8;
+  }
+  .mermaid-wrap {
+    position: relative; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px 20px; overflow: auto; margin-bottom: 16px;
+    display: flex; justify-content: center; align-items: center;
+    min-height: 400px; cursor: grab;
+  }
+  .mermaid-wrap.is-panning { cursor: grabbing; user-select: none; }
+  .zoom-controls {
+    position: absolute; top: 8px; right: 8px; display: flex; gap: 2px; z-index: 10;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 7px; padding: 2px;
+  }
+  .zoom-controls button {
+    width: 28px; height: 28px; border: none; background: transparent;
+    color: var(--text-dim); font-family: var(--font-mono); font-size: 14px;
+    cursor: pointer; border-radius: 5px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s, color .15s;
+  }
+  .zoom-controls button:hover { background: var(--border); color: var(--text); }
+  .mermaid-viewport { position: relative; overflow: hidden; width: 100%; height: 100%; min-height: 300px; }
+  .mermaid-canvas { position: absolute; top: 0; left: 0; }
+  .zoom-label { font-family: var(--font-mono); font-size: 10px; color: var(--text-faint); padding: 0 6px; white-space: nowrap; align-self: center; }
+  .mermaid .nodeLabel { font-family: var(--font-body) !important; font-size: 15px !important; }
+  .mermaid .edgeLabel { font-family: var(--font-mono) !important; font-size: 12px !important; }
+  .mermaid .node rect, .mermaid .node circle, .mermaid .node polygon { stroke-width: 1.5px !important; }
+
+  .legend { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 4px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 3px; }
+
+  /* ============ COMPONENT CARDS ============ */
+  .card-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .comp-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px; min-width: 0;
+    transition: border-color .18s, transform .18s;
+  }
+  .comp-card:hover { border-color: var(--border-bright); transform: translateY(-2px); }
+  .comp-card.touched { border-left: 3px solid var(--gold); }
+  .comp-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .comp-badge {
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: .05em;
+    padding: 3px 8px; border-radius: 5px; text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .badge-edit { background: var(--gold-dim); color: var(--gold); }
+  .badge-untouched { background: var(--surface-2); color: var(--text-faint); }
+  .comp-card h3 { margin: 0 0 3px; font-size: 15px; font-weight: 600; overflow-wrap: break-word; }
+  .comp-path { font-family: var(--font-mono); font-size: 11.5px; color: var(--blue); margin: 0 0 12px; overflow-wrap: break-word; }
+  .comp-card p { margin: 0; font-size: 13.5px; color: var(--text-dim); }
+  .comp-card .lines { margin-top: 12px; display: flex; gap: 12px; font-family: var(--font-mono); font-size: 12px; }
+  .comp-card .lines .add { color: var(--green); }
+  .comp-card .lines .del { color: var(--red); }
+
+  /* ============ TABLES ============ */
+  .table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 560px; }
+  caption { text-align: left; font-family: var(--font-mono); font-size: 12px; color: var(--text-faint); padding: 12px 16px 0; }
+  thead th {
+    text-align: left; font-family: var(--font-mono); font-size: 11px;
+    letter-spacing: .06em; text-transform: uppercase; color: var(--text-faint);
+    padding: 12px 16px; background: var(--surface-2); border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  tbody td { padding: 12px 16px; border-bottom: 1px solid var(--border); color: var(--text-dim); vertical-align: top; overflow-wrap: break-word; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover td { background: rgba(77,148,255,0.04); }
+  td b, td strong { color: var(--text); font-weight: 600; }
+  td code, .inline-code {
+    font-family: var(--font-mono); font-size: 12px;
+    background: var(--surface-2); color: var(--gold);
+    padding: 1px 5px; border-radius: 4px; overflow-wrap: break-word;
+  }
+  .pill { font-family: var(--font-mono); font-size: 11px; padding: 2px 8px; border-radius: 12px; white-space: nowrap; display: inline-block; }
+  .pill.ok { background: var(--green-dim); color: var(--green); }
+  .pill.warn { background: var(--gold-dim); color: var(--gold); }
+  .pill.info { background: var(--blue-dim); color: var(--blue); }
+
+  /* ============ DIFF ============ */
+  .diff {
+    background: #0a0f1a; border: 1px solid var(--border); border-radius: 12px;
+    overflow-x: auto; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.55;
+  }
+  .diff pre { margin: 0; padding: 18px 20px; }
+  .diff .dh { color: var(--text-faint); }
+  .diff .da { color: var(--green); background: rgba(77,208,138,0.07); display: block; }
+  .diff .dd { color: var(--red); background: rgba(232,105,125,0.07); display: block; }
+  .diff .dc { color: var(--text-dim); display: block; }
+  .diff .fname { color: var(--blue); }
+
+  .callout {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--gold); border-radius: 0 12px 12px 0;
+    padding: 16px 20px; font-size: 13.5px; line-height: 1.65; color: var(--text-dim);
+  }
+  .callout strong { color: var(--text); }
+  .callout code { font-family: var(--font-mono); font-size: 12px; background: var(--surface-2); color: var(--gold); padding: 1px 5px; border-radius: 4px; }
+
+  footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); font-family: var(--font-mono); font-size: 11.5px; color: var(--text-faint); }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .animate { opacity: 0; transform: translateY(10px); animation: rise .5s ease forwards; animation-delay: calc(var(--i, 0) * 60ms); }
+    @keyframes rise { to { opacity: 1; transform: none; } }
+  }
+  @media (max-width: 768px) {
+    body { padding: 28px 14px 64px; }
+    h1 { font-size: 28px; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <div class="eyebrow animate" style="--i:0">OmniRoute · open-sse · bugfix</div>
+  <h1 class="animate" style="--i:1">Tool-name cloak map survives on the <span class="accent">request-scoped ALS store</span></h1>
+  <p class="subtitle animate" style="--i:2">
+    Stop the per-request <code>_toolNameMap</code> from being lost across the capture
+    <code>JSON.parse(JSON.stringify())</code> rebuild — carry it on the request-scoped
+    <code>AsyncLocalStorage</code> instead of a fragile non-enumerable property. Kills the
+    PascalCase <code>my_*</code> tool-name rejection on opencode&nbsp;≥1.17.13.
+  </p>
+
+  <div class="meta-strip animate" style="--i:3">
+    <span class="chip"><span class="dot gold"></span>branch <b>fix/sse-tool-name-map-als-survival</b></span>
+    <span class="chip"><span class="dot blue"></span>base <b>upstream/main @ 1eae976b2</b> (v3.8.46)</span>
+    <span class="chip"><span class="dot green"></span>diff <b>+55 / −8</b> · 3 files</span>
+    <span class="chip"><span class="dot blue"></span>commit type <b>fix(sse)</b></span>
+    <span class="chip"><span class="dot green"></span>prod <b>omniroute:2026-07-07_18-47-43</b></span>
+  </div>
+
+  <nav class="toc animate" style="--i:4">
+    <a href="#change">01 · The change</a>
+    <a href="#flow">02 · Data flow</a>
+    <a href="#components">03 · Components</a>
+    <a href="#versions">04 · Versions</a>
+    <a href="#configs">05 · Configs &amp; tools</a>
+    <a href="#diff">06 · The diff</a>
+    <a href="#issues">07 · Prior art</a>
+  </nav>
+
+  <!-- 01 THE CHANGE -->
+  <section id="change">
+    <h2><span class="num">01</span> The change — before &amp; after</h2>
+    <div class="ba-grid">
+      <div class="ba-card before">
+        <span class="ba-tag">Before · fragile</span>
+        <h3>Non-enumerable re-attach, per body shape</h3>
+        <ul>
+          <li>Cloak attaches <code>_toolNameMap</code> as a <b>non-enumerable</b> prop on the request body.</li>
+          <li>Capture <code>body()</code> rebuilds via <code>JSON.parse(JSON.stringify())</code> → non-enumerable prop is <b>dropped</b>.</li>
+          <li>A re-attach hack copies it back from <code>fallback._toolNameMap</code> — patched <b>3×</b> (#4091/#4153/#4181), one per new body shape.</li>
+          <li>opencode 1.17.13's new <code>tools[]</code> shape perturbs it → map empty at restore → <code>HlLinearListProjects</code> leaks → client rejects.</li>
+        </ul>
+      </div>
+      <div class="ba-arrow">&rarr;</div>
+      <div class="ba-card after">
+        <span class="ba-tag">After · durable</span>
+        <h3>Carry the map on the ALS capture store</h3>
+        <ul>
+          <li>New <code>toolNameMap?</code> field on the <code>Capture</code> type.</li>
+          <li><code>stashRequestToolNameMap()</code> writes the <b>active ALS store</b> at cloak time (same request scope).</li>
+          <li><code>body()</code> reads the map from the ALS store first; non-enumerable prop kept as <b>fallback</b>.</li>
+          <li>ALS is <b>never serialized</b> → cannot be dropped by any body-shape round-trip. Fragility eliminated.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 02 DATA FLOW -->
+  <section id="flow">
+    <h2><span class="num">02</span> Where the map lives across the request</h2>
+    <p class="subtitle" style="font-size:14px;margin-bottom:16px">
+      Cloak runs <em>inside</em> the executor, which runs <em>inside</em> <code style="font-family:var(--font-mono);font-size:12px;background:var(--surface-2);color:var(--gold);padding:1px 5px;border-radius:4px">runWithCapture()</code>.
+      The ALS store is active at both map creation and re-attach — the same instance, same request scope.
+    </p>
+    <div class="diagram-shell">
+      <p class="diagram-shell__hint">Ctrl/Cmd + wheel to zoom · drag to pan · double-click to fit · &#x26F6; opens full size</p>
+      <div class="mermaid-wrap">
+        <div class="zoom-controls">
+          <button type="button" data-action="zoom-in" title="Zoom in">+</button>
+          <button type="button" data-action="zoom-out" title="Zoom out">&minus;</button>
+          <button type="button" data-action="zoom-fit" title="Smart fit">&#8634;</button>
+          <button type="button" data-action="zoom-one" title="1:1 zoom">1:1</button>
+          <button type="button" data-action="zoom-expand" title="Open full size">&#x26F6;</button>
+          <span class="zoom-label">Loading...</span>
+        </div>
+        <div class="mermaid-viewport">
+          <div class="mermaid mermaid-canvas"></div>
+        </div>
+      </div>
+      <script type="text/plain" class="diagram-source">
+        flowchart TD
+          CLIENT["opencode client<br/>sends my_mcp_server_search"] --> CHAT["chatCore.ts<br/>handleChatCore()"]
+          CHAT --> RWC{{"runWithCapture(providerRequestCapture, ...)<br/>chatCore.ts:2310 — ALS span OPENS"}}
+          RWC --> EXEC["executor.execute()<br/>base.ts / cliproxyapi.ts"]
+          EXEC --> CLOAK["cloakThirdPartyToolNames()<br/>base.ts:790"]
+          CLOAK --> GRTM["getRequestToolNameMap()<br/>claudeCodeToolRemapper.ts:42"]
+          GRTM --> NE["attach NON-ENUMERABLE<br/>_toolNameMap on body"]
+          GRTM --> STASH["stashRequestToolNameMap(map)<br/>writes ALS store.toolNameMap"]
+          NE --> SEND["send to Anthropic<br/>tools cloaked → PascalCase"]
+          STASH --> SEND
+          SEND --> BODY["providerRequestCapture.body(fallback)<br/>providerRequestLogging.ts:253"]
+          BODY --> RT["JSON.parse(JSON.stringify())<br/>drops non-enumerable prop"]
+          RT --> READ{"read map"}
+          READ -->|"1st: ALS store.toolNameMap<br/>(survives — never serialized)"| RESTORE["remapToolNamesInResponse()<br/>PascalCase → snake_case"]
+          READ -->|"fallback: body._toolNameMap<br/>(legacy / translator path)"| RESTORE
+          RESTORE --> OUT["client receives<br/>my_mcp_server_search ✓"]
+
+          classDef store fill:#2a2410,stroke:#e0b64d,stroke-width:1.5px,color:#f3e6c4;
+          classDef fix fill:#0f2f22,stroke:#4dd08a,stroke-width:1.5px,color:#c9f2dd;
+          classDef span fill:#10233f,stroke:#4d94ff,stroke-width:1.5px,color:#d5e6ff;
+          classDef danger fill:#2c1620,stroke:#e8697d,stroke-width:1.5px,color:#f6cdd5;
+          class RWC span;
+          class STASH,READ fix;
+          class NE,RT danger;
+      </script>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch" style="background:#4d94ff"></div> ALS capture span</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#4dd08a"></div> New / durable path</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:#e8697d"></div> Fragile serialization boundary</div>
+    </div>
+  </section>
+
+  <!-- 03 COMPONENTS -->
+  <section id="components">
+    <h2><span class="num">03</span> Components involved</h2>
+    <div class="card-grid">
+      <div class="comp-card touched">
+        <div class="comp-head"><span class="comp-badge badge-edit">edited</span></div>
+        <h3>Capture store + logger</h3>
+        <p class="comp-path">open-sse/utils/providerRequestLogging.ts</p>
+        <p>Added <span class="inline-code">toolNameMap?</span> to the <span class="inline-code">Capture</span> type, new exported <span class="inline-code">stashRequestToolNameMap()</span>, and made <span class="inline-code">body()</span> read the ALS store first.</p>
+        <div class="lines"><span class="add">+30</span><span class="del">−8</span></div>
+      </div>
+      <div class="comp-card touched">
+        <div class="comp-head"><span class="comp-badge badge-edit">edited</span></div>
+        <h3>Claude-code tool remapper</h3>
+        <p class="comp-path">open-sse/services/claudeCodeToolRemapper.ts</p>
+        <p><span class="inline-code">getRequestToolNameMap()</span> now also calls <span class="inline-code">stashRequestToolNameMap(existing)</span> with the <b>same Map reference</b> — later <span class="inline-code">.set()</span> visible via both paths.</p>
+        <div class="lines"><span class="add">+4</span><span class="del">−0</span></div>
+      </div>
+      <div class="comp-card touched">
+        <div class="comp-head"><span class="comp-badge badge-edit">edited</span></div>
+        <h3>Regression test</h3>
+        <p class="comp-path">tests/unit/provider-request-capture-toolname-map-4091.test.ts</p>
+        <p>+2 tests: the map recovers from the ALS store even when the non-enumerable prop is dropped from <b>both</b> copies; stash is a no-op outside a capture scope.</p>
+        <div class="lines"><span class="add">+29</span><span class="del">−0</span></div>
+      </div>
+      <div class="comp-card">
+        <div class="comp-head"><span class="comp-badge badge-untouched">untouched</span></div>
+        <h3>Executors (call site)</h3>
+        <p class="comp-path">open-sse/executors/base.ts · cliproxyapi.ts</p>
+        <p>Where <span class="inline-code">cloakThirdPartyToolNames()</span> runs — inside the <span class="inline-code">runWithCapture</span> span. No change; relied on for ALS lifetime.</p>
+      </div>
+      <div class="comp-card">
+        <div class="comp-head"><span class="comp-badge badge-untouched">untouched</span></div>
+        <h3>Restore + same-scope read</h3>
+        <p class="comp-path">handlers/chatCore.ts:1940 · remapToolNamesInResponse</p>
+        <p>Same-scope restore already reads the body prop directly and works. Streaming restore at <span class="inline-code">claude-to-openai.ts:60</span> unchanged.</p>
+      </div>
+      <div class="comp-card">
+        <div class="comp-head"><span class="comp-badge badge-untouched">untouched</span></div>
+        <h3>Translator enumerable path</h3>
+        <p class="comp-path">translator/request/*-to-gemini.ts · to-claude.ts</p>
+        <p>These set <span class="inline-code">result._toolNameMap</span> <b>enumerable</b> (survives JSON). Preserved as the <span class="inline-code">body()</span> fallback — not disturbed.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 04 VERSIONS -->
+  <section id="versions">
+    <h2><span class="num">04</span> Versions &amp; environments</h2>
+    <div class="table-scroll">
+      <table>
+        <caption>Artifacts, versions and where they live</caption>
+        <thead>
+          <tr><th>Artifact</th><th>Version / ref</th><th>Role</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><b>OmniRoute</b> app</td><td><code>&ge;v3.8.45</code></td><td>The router that PascalCases + restores tool names</td><td><span class="pill ok">fix proposed</span></td></tr>
+          <tr><td>Upstream base (PR)</td><td><code>upstream/main @ 1eae976b2</code> (v3.8.46 closing)</td><td>Branch base for the prepared upstream PR</td><td><span class="pill info">prepared</span></td></tr>
+          <tr><td><b>opencode</b></td><td><code>1.17.13</code> (was pinned <code>1.17.11</code>)</td><td>Client whose 1.17.13 <code>tools[]</code> shape exposed the bug</td><td><span class="pill ok">pin removed</span></td></tr>
+          <tr><td>Node runtime</td><td><code>&ge;22 &lt;23 || &ge;24 &lt;27</code>, ESM + tsx</td><td>App runtime; Node built-in test runner</td><td><span class="pill info">—</span></td></tr>
+          <tr><td>GitHub fork</td><td><code>user/OmniRoute</code></td><td>Where the upstream-targeted branch is prepared</td><td><span class="pill info">ready</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 05 CONFIGS & TOOLS -->
+  <section id="configs">
+    <h2><span class="num">05</span> Configs, modules &amp; tools touched</h2>
+    <div class="table-scroll">
+      <table>
+        <caption>Runtime modules, configs and toolchain in play</caption>
+        <thead>
+          <tr><th>Item</th><th>What it is</th><th>Interaction with the fix</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>AsyncLocalStorage&lt;Capture&gt;</code></td><td><code>node:async_hooks</code> store in <code>providerRequestLogging.ts</code></td><td><b>The durable carrier.</b> Already existed for request logging; now also holds <code>toolNameMap</code>.</td></tr>
+          <tr><td><code>runWithCapture()</code></td><td>Opens the ALS span around the executor call</td><td>Guarantees the store is active at both cloak &amp; <code>body()</code> — the fix's correctness hinge.</td></tr>
+          <tr><td><code>CLAUDE_DISABLE_TOOL_NAME_CLOAK</code></td><td>Env kill-switch (<code>claudeCodeToolRemapper.ts:245</code>)</td><td>Honored unchanged — when <code>true</code> the cloak (and stash) never runs.</td></tr>
+          <tr><td>Node test runner</td><td><code>node --test</code> + <code>tsx</code> + isolateDataDir</td><td>Runs the +2 regression tests (<code>DISABLE_SQLITE_AUTO_BACKUP=true</code>).</td></tr>
+          <tr><td>eslint</td><td>Repo lint gate (not vitest/biome)</td><td>Clean on both edited source files; <code>tsc</code> baseline noise is pre-existing &amp; unrelated.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- 06 DIFF -->
+  <section id="diff">
+    <h2><span class="num">06</span> The diff · +55 / −8</h2>
+    <div class="diff">
+<pre><span class="dh">diff --git a/open-sse/utils/providerRequestLogging.ts</span>
+<span class="dc">  export type Capture = {</span>
+<span class="dc">    capture: (request: ProviderRequestPrepared) =&gt; Promise&lt;void&gt; | void;</span>
+<span class="dc">    body: (fallback: unknown) =&gt; unknown;</span>
+<span class="dc">    latest?: () =&gt; ProviderRequestPrepared | null;</span>
+<span class="da">+   // Per-request alias→original tool-name map, carried on the ALS store so it</span>
+<span class="da">+   // survives the JSON.parse(JSON.stringify()) body rebuild (#4091/#4153/#4181).</span>
+<span class="da">+   toolNameMap?: Map&lt;string, string&gt;;</span>
+<span class="dc">  };</span>
+<span class="dc">  </span>
+<span class="dc">  export function runWithCapture&lt;T&gt;(requestCapture: Capture, fn) { ... }</span>
+<span class="da">+ </span>
+<span class="da">+ export function stashRequestToolNameMap(map: Map&lt;string, string&gt;): void {</span>
+<span class="da">+   const store = captureState.context.getStore();</span>
+<span class="da">+   if (store) store.toolNameMap = map;</span>
+<span class="da">+ }</span>
+<span class="dc">  </span>
+<span class="dc">    body(fallback) {</span>
+<span class="dc">      const resolved = latest?.body ?? fallback;</span>
+<span class="dc">      // ... re-attach the map, kept non-enumerable ...</span>
+<span class="dc">      if (resolved !== fallback &amp;&amp; resolved &amp;&amp; ... ) {</span>
+<span class="dd">-       const map = (fallback as Record&lt;string, unknown&gt;)._toolNameMap;</span>
+<span class="da">+       const stored = captureState.context.getStore()?.toolNameMap;</span>
+<span class="da">+       const fallbackMap = (fallback as Record&lt;string, unknown&gt;)._toolNameMap;</span>
+<span class="da">+       const map = stored instanceof Map ? stored : fallbackMap;</span>
+<span class="dc">        const target = resolved as Record&lt;string, unknown&gt;;</span>
+<span class="dc">        if (map instanceof Map &amp;&amp; !(target._toolNameMap instanceof Map)) { ... }</span>
+<span class="dc">      }</span>
+
+<span class="dh">diff --git a/open-sse/services/claudeCodeToolRemapper.ts</span>
+<span class="da">+ import { stashRequestToolNameMap } from "../utils/providerRequestLogging.ts";</span>
+<span class="dc">  function getRequestToolNameMap(body) {</span>
+<span class="dc">    const existing = body._toolNameMap instanceof Map ? ... : new Map();</span>
+<span class="dc">    Object.defineProperty(body, "_toolNameMap", { ...non-enumerable... });</span>
+<span class="da">+   // Also stash on the request-scoped capture store so the map survives the</span>
+<span class="da">+   // JSON.parse(JSON.stringify()) rebuild. No-op outside a capture scope.</span>
+<span class="da">+   stashRequestToolNameMap(existing);</span>
+<span class="dc">    return existing;</span>
+<span class="dc">  }</span>
+
+<span class="dh">diff --git a/tests/unit/provider-request-capture-toolname-map-4091.test.ts</span>
+<span class="da">+ test("survives capture round-trip via ALS store when non-enumerable prop is</span>
+<span class="da">+   dropped from both copies", async () =&gt; { ... runWithCapture(...) ... });</span>
+<span class="da">+ test("stashRequestToolNameMap is a no-op outside runWithCapture", () =&gt; { ... });</span>
+</pre>
+    </div>
+  </section>
+
+  <!-- 07 PRIOR ART -->
+  <section id="issues">
+    <h2><span class="num">07</span> Prior art — the reactive patches this replaces</h2>
+    <div class="table-scroll">
+      <table>
+        <caption>Upstream issues that patched the same fragility per body shape</caption>
+        <thead>
+          <tr><th>Issue</th><th>What it did</th><th>Relationship to this PR</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>#4153</code></td><td>First generic re-attach of the non-enumerable <code>_toolNameMap</code> in <code>body()</code></td><td>Kept as the fallback path; this PR adds the durable ALS carrier above it</td></tr>
+          <tr><td><code>#4091</code></td><td>Test guarding the Antigravity map through the capture round-trip</td><td>Same fragility class; the new ALS test generalizes the guarantee</td></tr>
+          <tr><td><code>#4181</code></td><td>Restored MCP names on the native Claude path (<code>_ide</code> variant)</td><td>Antigravity enumerable path untouched — no regression (3/3 tests pass)</td></tr>
+          <tr><td><code>opencode&nbsp;#33533/#33593</code></td><td><code>mcp__server__tool</code> naming (merged then reverted)</td><td>Path&nbsp;B alternative (cloak-exempt names); not taken — this is the OmniRoute-side fix</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="callout" style="margin-top:18px">
+      <strong>Why durable, not just another patch.</strong> #4091/#4153/#4181 each re-attach the
+      map at a specific serialization boundary — correct for the body shapes of their time, but a
+      new opencode body shape can re-strand the map. The ALS store is <strong>never serialized</strong>
+      and shares the executor's request lifetime, so it survives regardless of body shape. The
+      non-enumerable re-attach stays as a backward-compatible fallback.
+    </div>
+  </section>
+
+  <footer>
+    OmniRoute · Path A — _toolNameMap AsyncLocalStorage survival fix ·
+    prepared for upstream diegosouzapw/OmniRoute · generated 2026-07-07
+  </footer>
+
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+  let elkOk = false;
+  try {
+    const elk = await import('https://cdn.jsdelivr.net/npm/@mermaid-js/layout-elk/dist/mermaid-layout-elk.esm.min.mjs');
+    mermaid.registerLayoutLoaders(elk.default);
+    elkOk = true;
+  } catch (e) { /* dagre fallback */ }
+
+  const config = {
+    fitPadding: 28, minHeight: 360, maxHeightPx: 1100, maxHeightVh: 0.86,
+    maxInitialZoom: 1.8, minZoom: 0.08, maxZoom: 6.5, zoomStep: 0.14, readabilityFloor: 0.55
+  };
+  const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+  let activeDrag = null;
+  addEventListener('mousemove', (e) => activeDrag?.onMove(e));
+  addEventListener('mouseup', () => { activeDrag?.onEnd(); activeDrag = null; });
+
+  mermaid.initialize({
+    startOnLoad: false, theme: 'base', look: 'classic',
+    layout: elkOk ? 'elk' : 'dagre',
+    themeVariables: {
+      fontFamily: "'IBM Plex Sans', system-ui, sans-serif",
+      fontSize: '15px',
+      primaryColor: '#16233b',
+      primaryBorderColor: '#33507a',
+      primaryTextColor: '#e8eef7',
+      secondaryColor: '#10233f',
+      secondaryBorderColor: '#4d94ff',
+      secondaryTextColor: '#e8eef7',
+      tertiaryColor: '#2a2410',
+      tertiaryBorderColor: '#e0b64d',
+      tertiaryTextColor: '#f3e6c4',
+      lineColor: '#5f7595',
+      clusterBkg: '#0e1a2e',
+      clusterBorder: '#24344f'
+    }
+  });
+
+  function initDiagram(shell) {
+    const wrap = shell.querySelector('.mermaid-wrap');
+    const viewport = shell.querySelector('.mermaid-viewport');
+    const canvas = shell.querySelector('.mermaid-canvas');
+    const source = shell.querySelector('.diagram-source');
+    const label = shell.querySelector('.zoom-label');
+    if (!wrap || !viewport || !canvas || !source || !label) return;
+
+    let zoom = 1, fitMode = 'contain', panX = 0, panY = 0, svgW = 0, svgH = 0;
+    let sx = 0, sy = 0, spx = 0, spy = 0, touchDist = 0, touchCx = 0, touchCy = 0;
+
+    function constrainPan() {
+      const vpW = viewport.clientWidth, vpH = viewport.clientHeight;
+      const rW = svgW * zoom, rH = svgH * zoom, pad = config.fitPadding;
+      panX = (rW + pad * 2 <= vpW) ? (vpW - rW) / 2 : clamp(panX, vpW - rW - pad, pad);
+      panY = (rH + pad * 2 <= vpH) ? (vpH - rH) / 2 : clamp(panY, vpH - rH - pad, pad);
+    }
+    function applyTransform() {
+      const svg = canvas.querySelector('svg');
+      if (!svg || !svgW) return;
+      constrainPan();
+      svg.style.width = (svgW * zoom) + 'px';
+      svg.style.height = (svgH * zoom) + 'px';
+      canvas.style.transform = `translate(${panX}px, ${panY}px)`;
+      label.textContent = Math.round(zoom * 100) + '% \u2014 ' + fitMode;
+    }
+    function canPan() {
+      const rW = svgW * zoom, rH = svgH * zoom;
+      return rW + config.fitPadding * 2 > viewport.clientWidth || rH + config.fitPadding * 2 > viewport.clientHeight;
+    }
+    function computeSmartFit() {
+      const vpW = viewport.clientWidth, vpH = viewport.clientHeight;
+      const aW = Math.max(80, vpW - config.fitPadding * 2), aH = Math.max(80, vpH - config.fitPadding * 2);
+      const contain = Math.min(aW / svgW, aH / svgH);
+      let z = contain, mode = 'contain';
+      if (contain < config.readabilityFloor) {
+        const chartR = svgH / svgW, vpR = vpH / Math.max(vpW, 1);
+        if (chartR >= vpR) { z = aW / svgW; mode = 'width-priority'; }
+        else { z = aH / svgH; mode = 'height-priority'; }
+      }
+      return { zoom: clamp(z, config.minZoom, config.maxInitialZoom), mode };
+    }
+    function fitDiagram() {
+      if (!svgW) return;
+      const fit = computeSmartFit();
+      zoom = fit.zoom; fitMode = fit.mode;
+      panX = (viewport.clientWidth - svgW * zoom) / 2;
+      panY = (viewport.clientHeight - svgH * zoom) / 2;
+      applyTransform();
+    }
+    function setOneToOne() {
+      zoom = clamp(1, config.minZoom, config.maxZoom); fitMode = '1:1';
+      panX = (viewport.clientWidth - svgW * zoom) / 2;
+      panY = (viewport.clientHeight - svgH * zoom) / 2;
+      applyTransform();
+    }
+    function zoomAround(factor, cx, cy) {
+      const next = clamp(zoom * factor, config.minZoom, config.maxZoom);
+      const ratio = next / zoom;
+      panX = cx - ratio * (cx - panX);
+      panY = cy - ratio * (cy - panY);
+      zoom = next; fitMode = 'custom'; applyTransform();
+    }
+    function readSvgNaturalSize(svg) {
+      let w = 0, h = 0;
+      if (svg.viewBox?.baseVal?.width > 0) { w = svg.viewBox.baseVal.width; h = svg.viewBox.baseVal.height; }
+      if (!w) { w = parseFloat(svg.getAttribute('width')) || 0; h = parseFloat(svg.getAttribute('height')) || 0; }
+      if (!w) { const b = svg.getBBox(); w = b.width; h = b.height; }
+      if (!w) { const r = svg.getBoundingClientRect(); w = r.width || 1000; h = r.height || 700; }
+      if (!svg.getAttribute('viewBox')) svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      return { w, h };
+    }
+    function setAdaptiveHeight() {
+      if (!svgW) return;
+      const usableW = Math.max(280, wrap.getBoundingClientRect().width - 2);
+      const idealH = (svgH / svgW) * usableW + config.fitPadding * 2;
+      const maxVp = Math.floor(innerHeight * config.maxHeightVh);
+      const hardMax = Math.min(config.maxHeightPx, Math.max(config.minHeight + 40, maxVp));
+      wrap.style.height = Math.round(clamp(idealH, config.minHeight, hardMax)) + 'px';
+    }
+    function openInNewTab() {
+      const svg = canvas.querySelector('svg');
+      if (!svg) return;
+      const clone = svg.cloneNode(true);
+      clone.style.width = ''; clone.style.height = '';
+      const bg = '#0b1220';
+      const html = `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Diagram</title><style>
+      body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:${bg};padding:40px;box-sizing:border-box}
+      svg{max-width:100%;max-height:90vh;height:auto}</style></head><body>${clone.outerHTML}</body></html>`;
+      open(URL.createObjectURL(new Blob([html], { type: 'text/html' })), '_blank');
+    }
+    async function render() {
+      try {
+        const code = source.textContent.trim();
+        if (!code) { label.textContent = 'Error: Empty source'; return; }
+        const id = 'diagram-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+        const { svg } = await mermaid.render(id, code);
+        const parsed = new DOMParser().parseFromString(svg, 'text/html');
+        const parsedSvg = parsed.body.querySelector('svg');
+        if (!parsedSvg) { label.textContent = 'Error: No SVG'; return; }
+        canvas.replaceChildren(document.adoptNode(parsedSvg));
+        const svgNode = canvas.querySelector('svg');
+        if (!svgNode) { label.textContent = 'Error: No SVG'; return; }
+        const size = readSvgNaturalSize(svgNode);
+        svgW = size.w; svgH = size.h;
+        svgNode.removeAttribute('width'); svgNode.removeAttribute('height');
+        svgNode.style.maxWidth = 'none'; svgNode.style.display = 'block';
+        setAdaptiveHeight(); fitDiagram();
+      } catch (err) {
+        console.error('Mermaid render failed:', err);
+        label.textContent = 'Error: ' + (err.message || 'Render failed');
+      }
+    }
+    const actions = {
+      'zoom-in': () => zoomAround(1 + config.zoomStep, viewport.clientWidth / 2, viewport.clientHeight / 2),
+      'zoom-out': () => zoomAround(1 / (1 + config.zoomStep), viewport.clientWidth / 2, viewport.clientHeight / 2),
+      'zoom-fit': fitDiagram, 'zoom-one': setOneToOne, 'zoom-expand': openInNewTab
+    };
+    Object.entries(actions).forEach(([action, handler]) => {
+      wrap.querySelector(`[data-action="${action}"]`)?.addEventListener('click', handler);
+    });
+    viewport.addEventListener('dblclick', fitDiagram);
+    viewport.addEventListener('wheel', (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const rect = viewport.getBoundingClientRect();
+        const factor = e.deltaY < 0 ? 1 + config.zoomStep : 1 / (1 + config.zoomStep);
+        zoomAround(factor, e.clientX - rect.left, e.clientY - rect.top);
+        return;
+      }
+      if (canPan()) { e.preventDefault(); panX -= e.deltaX; panY -= e.deltaY; applyTransform(); }
+    }, { passive: false });
+    viewport.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.zoom-controls') || !canPan()) return;
+      wrap.classList.add('is-panning');
+      sx = e.clientX; sy = e.clientY; spx = panX; spy = panY; e.preventDefault();
+      activeDrag = {
+        onMove: (ev) => { panX = spx + (ev.clientX - sx); panY = spy + (ev.clientY - sy); applyTransform(); },
+        onEnd: () => wrap.classList.remove('is-panning')
+      };
+    });
+    viewport.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 1) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; spx = panX; spy = panY; }
+      else if (e.touches.length === 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX, dy = e.touches[0].clientY - e.touches[1].clientY;
+        touchDist = Math.sqrt(dx * dx + dy * dy);
+        const r = viewport.getBoundingClientRect();
+        touchCx = (e.touches[0].clientX + e.touches[1].clientX) / 2 - r.left;
+        touchCy = (e.touches[0].clientY + e.touches[1].clientY) / 2 - r.top;
+      }
+    }, { passive: true });
+    viewport.addEventListener('touchmove', (e) => {
+      if (e.touches.length === 1 && canPan()) {
+        if (touchDist > 0) { sx = e.touches[0].clientX; sy = e.touches[0].clientY; spx = panX; spy = panY; touchDist = 0; }
+        e.preventDefault();
+        panX = spx + (e.touches[0].clientX - sx); panY = spy + (e.touches[0].clientY - sy); applyTransform();
+      } else if (e.touches.length === 2 && touchDist > 0) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - e.touches[1].clientX, dy = e.touches[0].clientY - e.touches[1].clientY;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        zoomAround(d / touchDist, touchCx, touchCy); touchDist = d;
+      }
+    }, { passive: false });
+    new ResizeObserver(() => { if (svgW) { setAdaptiveHeight(); fitDiagram(); } }).observe(wrap);
+    render();
+  }
+  document.querySelectorAll('.diagram-shell').forEach(initDiagram);
+</script>
+
+</body>
+</html>
