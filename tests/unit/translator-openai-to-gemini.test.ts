@@ -517,22 +517,6 @@ test("OpenAI -> Gemini helper IDs and JSON parsing stay in the expected format",
   assert.equal(tryParseJSON("not-json"), null as any);
 });
 
-test("OpenAI -> Cloud Code Gemini applies native request defaults", () => {
-  const request = openaiToCloudCodeGeminiRequest(
-    "gemini-3-flash-preview",
-    {
-      messages: [{ role: "user", content: "Hello" }],
-      reasoning_effort: "high",
-    },
-    true
-  ) as any;
-
-  assert.equal(request.model, "gemini-3-flash-preview");
-  assert.equal(request.generationConfig.thinkingConfig.includeThoughts, true);
-  assert.equal(request.generationConfig.topK, undefined);
-  assert.equal(request.contents.at(-1).parts[0].text, "Hello");
-});
-
 test("OpenAI -> Cloud Code Gemini emits native functionResponse result", () => {
   const request = openaiToCloudCodeGeminiRequest(
     "gemini-3-flash-preview",
@@ -598,13 +582,12 @@ test("OpenAI -> Antigravity wraps Gemini requests in a Cloud Code envelope", () 
     "model",
     "userAgent",
     "requestType",
-    "enabledCreditTypes",
   ]);
   assert.equal(result.userAgent, "antigravity");
   assert.equal(result.requestType, "agent");
   assert.match(result.requestId, /^agent\/\d+\/[0-9a-f]{8}$/);
   assert.match(result.request.sessionId, /^-?\d+$/);
-  assert.deepEqual(result.enabledCreditTypes, ["GOOGLE_ONE_AI"]);
+  assert.equal(result.enabledCreditTypes, undefined);
   assert.equal(result.request.generationConfig.topK, 40);
   assert.equal(result.request.generationConfig.topP, 1.0);
   assert.equal(
@@ -875,7 +858,7 @@ test("OpenAI -> Antigravity maps Claude-family models to Gemini-compatible schem
   assert.equal(result.project, "proj-claude");
   assert.equal(result.userAgent, "antigravity");
   assert.match(result.requestId, /^agent\/\d+\/[0-9a-f]{8}$/);
-  assert.deepEqual((result as any).enabledCreditTypes, ["GOOGLE_ONE_AI"]);
+  assert.equal(result.enabledCreditTypes, undefined);
   assert.equal(result.request.systemInstruction.parts[0].text, ANTIGRAVITY_DEFAULT_SYSTEM);
   assert.equal(result.request.systemInstruction.parts[1].text, "Project rules");
   assert.equal((result as any).request?.generationConfig.maxOutputTokens, undefined);

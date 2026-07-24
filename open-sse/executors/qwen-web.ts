@@ -67,6 +67,7 @@ const MODEL_ALIASES: Record<string, string> = {
 };
 
 const DEFAULT_MODEL = "qwen3.7-max";
+const REQUIRED_THINKING_MODELS = new Set(["qwen3.8-max-preview"]);
 
 function mapModel(modelId: string): string {
   return MODEL_ALIASES[modelId] || modelId;
@@ -255,11 +256,32 @@ export class QwenWebExecutor extends BaseExecutor {
     };
   }
 
+  /** Flatten OpenAI-style content (string | Array<{type,text}>) into plain text.
+   *  A bare String() on an array of content parts yields "[object Object]" — the
+   *  serialization bug reported on the support mesh. */
+  private contentToText(content: unknown): string {
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((part) => {
+          if (typeof part === "string") return part;
+          if (part && typeof part === "object") {
+            const p = part as { type?: unknown; text?: unknown };
+            if (typeof p.text === "string") return p.text;
+          }
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n");
+    }
+    return content == null ? "" : String(content);
+  }
+
   private foldMessages(messages: Array<{ role: string; content: unknown }>): string {
     let systemContent = "";
     let userContent = "";
     for (const m of messages) {
-      const text = String(m.content ?? "");
+      const text = this.contentToText(m.content);
       if (m.role === "system") {
         systemContent += (systemContent ? "\n\n" : "") + text;
       } else if (m.role === "user") {
@@ -276,7 +298,8 @@ export class QwenWebExecutor extends BaseExecutor {
     requestedModel: string
   ): Record<string, unknown> {
     const fid = uuid();
-    const enableThinking = /think|reason|r1/i.test(requestedModel);
+    const enableThinking =
+      REQUIRED_THINKING_MODELS.has(modelId) || /think|reason|r1/i.test(requestedModel);
     const featureConfig: Record<string, unknown> = {
       thinking_enabled: enableThinking,
       output_schema: "phase",

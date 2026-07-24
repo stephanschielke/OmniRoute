@@ -134,7 +134,7 @@ export async function runServe(opts = {}) {
     "Release",
     "better_sqlite3.node"
   );
-  if (existsSync(sqliteBinary) && !isNativeBinaryCompatible(sqliteBinary)) {
+  if (!process.versions.bun && existsSync(sqliteBinary) && !isNativeBinaryCompatible(sqliteBinary)) {
     console.error(
       "\x1b[31m✖ better-sqlite3 native module is incompatible with this platform.\x1b[0m"
     );
@@ -230,7 +230,10 @@ export async function runServe(opts = {}) {
 function runDaemon(serverJs, env, memoryLimit, dashboardPort, apiPort) {
   // #5238: skip the explicit CLI --max-old-space-size when the user pinned the
   // heap via NODE_OPTIONS (a CLI arg would shadow/override their value).
-  const server = spawn("node", [...buildNodeHeapArgs(process.env, memoryLimit), serverJs], {
+  const server = spawn(process.versions.bun ? process.execPath : "node", [
+    ...(process.versions.bun ? [] : buildNodeHeapArgs(process.env, memoryLimit)),
+    serverJs,
+  ], {
     cwd: APP_DIR,
     env,
     stdio: "ignore",
@@ -246,7 +249,10 @@ function runDaemon(serverJs, env, memoryLimit, dashboardPort, apiPort) {
 function runWithoutRecovery(serverJs, env, memoryLimit, dashboardPort, apiPort, noOpen, startedAt) {
   // #5238: skip the explicit CLI --max-old-space-size when the user pinned the
   // heap via NODE_OPTIONS (a CLI arg would shadow/override their value).
-  const server = spawn("node", [...buildNodeHeapArgs(process.env, memoryLimit), serverJs], {
+  const server = spawn(process.versions.bun ? process.execPath : "node", [
+    ...(process.versions.bun ? [] : buildNodeHeapArgs(process.env, memoryLimit)),
+    serverJs,
+  ], {
     cwd: APP_DIR,
     env,
     stdio: "pipe",
@@ -351,8 +357,32 @@ async function runWithSupervisor(
       if (up) {
         if (useTray) await maybeStartTray(dashboardPort, apiPort, supervisor);
         onReady(dashboardPort, apiPort, noOpen, startedAt);
+      } else {
+        reportReadinessTimeout(dashboardPort, supervisor);
       }
     });
+  }
+}
+
+// #6321: waitForServer resolving `false` used to fall through silently — the CLI
+// printed the banner + "⏳ Starting server..." and then produced ZERO further
+// output forever, even though the child process may well have crashed or be
+// stuck (issue reports show the server sometimes actually comes up later, or is
+// reachable directly while the CLI still looks hung). Surface a clear diagnostic
+// plus whatever stdout/stderr the child buffered instead of going silent.
+export function reportReadinessTimeout(dashboardPort, supervisor) {
+  console.error(
+    `\n\x1b[33m⚠ Server did not respond within 60s.\x1b[0m It may still be starting, or may` +
+      ` have failed silently.`
+  );
+  console.error(`  Try:  curl -I http://localhost:${dashboardPort}/api/monitoring/health`);
+  console.error(`  Or:   rerun with \x1b[36m--log\x1b[0m to see live server output.\n`);
+
+  const recentLog = supervisor?.getRecentLog?.() ?? [];
+  if (recentLog.length) {
+    console.error("--- Recent server output ---");
+    recentLog.forEach((l) => console.error(l));
+    console.error("--- End recent output ---\n");
   }
 }
 

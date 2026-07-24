@@ -6,6 +6,9 @@ const {
   getDefaultComboConfig,
   resolveComboTargetTimeoutMs,
   DEFAULT_COMBO_TARGET_TIMEOUT_MS,
+  COMBO_TARGET_TIMEOUT_WAIT_BUFFER_MS,
+  isComboCooldownWaitEligible,
+  resolveComboTargetTimeoutMsForCombo,
   resolveComboQueueDepth,
 } = await import("../../open-sse/services/comboConfig.ts");
 const { createComboSchema, updateComboDefaultsSchema } =
@@ -318,6 +321,62 @@ test("resolveComboTargetTimeoutMs falls back to the saner combo default when uns
   assert.equal(resolveComboTargetTimeoutMs({}, 0, 120000), 0);
 });
 
+// #7360 follow-up: a "default" auto-strategy combo hitting Gemini TPM/RPM on both
+// targets waits out cooldowns for up to comboCooldownWait.budgetMs (default 130s), but
+// DEFAULT_COMBO_TARGET_TIMEOUT_MS (120s) is shorter — the per-target timeout was cutting
+// the wait off early and returning a synthetic 524 instead of letting the wait finish.
+test("isComboCooldownWaitEligible only engages for quota-share/auto with the feature enabled", () => {
+  assert.equal(isComboCooldownWaitEligible("auto", { enabled: true }), true);
+  assert.equal(isComboCooldownWaitEligible("quota-share", { enabled: true }), true);
+  assert.equal(isComboCooldownWaitEligible("auto", { enabled: false }), false);
+  assert.equal(isComboCooldownWaitEligible("fill-first", { enabled: true }), false);
+  assert.equal(isComboCooldownWaitEligible("priority", { enabled: true }), false);
+});
+
+test("resolveComboTargetTimeoutMsForCombo raises the floor to cover the cooldown-wait budget for eligible strategies", () => {
+  const comboCooldownWait = { enabled: true, budgetMs: 130000 };
+
+  // Wait-eligible strategy: floor is budget + buffer (150s), not the 120s default.
+  assert.equal(
+    resolveComboTargetTimeoutMsForCombo({}, 600000, "auto", comboCooldownWait),
+    130000 + COMBO_TARGET_TIMEOUT_WAIT_BUFFER_MS
+  );
+  assert.equal(
+    resolveComboTargetTimeoutMsForCombo({}, 600000, "quota-share", comboCooldownWait),
+    130000 + COMBO_TARGET_TIMEOUT_WAIT_BUFFER_MS
+  );
+
+  // Not wait-eligible (wrong strategy, or feature disabled): unchanged 120s default.
+  assert.equal(
+    resolveComboTargetTimeoutMsForCombo({}, 600000, "fill-first", comboCooldownWait),
+    DEFAULT_COMBO_TARGET_TIMEOUT_MS
+  );
+  assert.equal(
+    resolveComboTargetTimeoutMsForCombo({}, 600000, "auto", { enabled: false, budgetMs: 130000 }),
+    DEFAULT_COMBO_TARGET_TIMEOUT_MS
+  );
+
+  // A small budget below the 120s default never lowers the floor.
+  assert.equal(
+    resolveComboTargetTimeoutMsForCombo({}, 600000, "auto", { enabled: true, budgetMs: 5000 }),
+    DEFAULT_COMBO_TARGET_TIMEOUT_MS
+  );
+
+  // Explicit per-combo targetTimeoutMs still wins over the derived floor.
+  assert.equal(
+    resolveComboTargetTimeoutMsForCombo(
+      { targetTimeoutMs: 45000 },
+      600000,
+      "auto",
+      comboCooldownWait
+    ),
+    45000
+  );
+
+  // The derived floor is still capped at the upstream ceiling.
+  assert.equal(resolveComboTargetTimeoutMsForCombo({}, 100000, "auto", comboCooldownWait), 100000);
+});
+
 test("combo timeout schema rejects values beyond the safe timer limit", () => {
   const result = createComboSchema.safeParse({
     name: "unsafe-timeout",
@@ -369,7 +428,7 @@ test("resolveComboConfig tolerates invalid or missing inputs and falls back to d
 test("createComboSchema accepts context-relay strategy with handoff config", () => {
   const parsed = createComboSchema.parse({
     name: "codex-relay",
-    models: ["codex/gpt-5.4"],
+    models: ["codex/gpt-5.6-sol"],
     strategy: "context-relay",
     config: {
       handoffThreshold: 0.85,
@@ -443,7 +502,7 @@ test("createComboSchema accepts structured combo steps with pinned connection an
         kind: "model",
         id: "step-codex-a",
         providerId: "codex",
-        model: "gpt-5.4",
+        model: "gpt-5.6-sol",
         connectionId: "conn-codex-a",
         weight: 10,
       },
@@ -472,14 +531,14 @@ test("createComboSchema accepts composite tiers that reference normalized combo 
         kind: "model",
         id: "step-primary",
         providerId: "codex",
-        model: "gpt-5.4",
+        model: "gpt-5.6-sol",
         connectionId: "conn-codex-a",
       },
       {
         kind: "model",
         id: "step-backup",
         providerId: "codex",
-        model: "gpt-5.4",
+        model: "gpt-5.6-sol",
         connectionId: "conn-codex-b",
       },
     ],

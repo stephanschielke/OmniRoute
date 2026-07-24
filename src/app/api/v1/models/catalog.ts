@@ -1,18 +1,26 @@
 import { PROVIDER_MODELS, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
 import { NOAUTH_PROVIDERS } from "@/shared/constants/providers";
 import {
-  getProviderConnections,
+  getCachedRawProviderConnections,
   getCombos,
   getAllCustomModels,
   getSettings,
-  getProviderNodes,
+  getCachedProviderNodes,
   getModelIsHidden,
   getModelAliases,
+  getDatabaseSettings,
 } from "@/lib/localDb";
+import { createLazyConnectionView } from "@/lib/db/providers/lazyConnectionView";
 import { extractAliasBackedModels } from "./aliasBackedModels";
 import { appendNoThinkingVariants } from "@omniroute/open-sse/utils/noThinkingAlias";
+import { appendClaudeEffortVariants } from "@omniroute/open-sse/utils/claudeEffortVariants";
+import { appendSyncedEffortVariants } from "@omniroute/open-sse/utils/syncedEffortVariants";
+import { buildSyncedCapabilities, mergeSyncedCapabilities } from "./syncedCapabilities";
 import { getAllEmbeddingModels } from "@omniroute/open-sse/config/embeddingRegistry";
-import { getAllImageModels } from "@omniroute/open-sse/config/imageRegistry";
+import {
+  getAllImageModels,
+  isRegisteredImageModel,
+} from "@omniroute/open-sse/config/imageRegistry";
 import { getAllRerankModels } from "@omniroute/open-sse/config/rerankRegistry";
 import { getAllAudioModels } from "@omniroute/open-sse/config/audioRegistry";
 import { getAllModerationModels } from "@omniroute/open-sse/config/moderationRegistry";
@@ -26,10 +34,12 @@ import {
   AUTO_SUFFIX_VARIANTS,
   AUTO_FAMILY_IDS,
   createBuiltinAutoCombo,
+  isPaidTierAutoId,
 } from "@omniroute/open-sse/services/autoCombo/builtinCatalog";
 import { getAllSyncedAvailableModels, type SyncedAvailableModel } from "@/lib/db/models";
 import { getModelCatalogCacheVersion } from "@/lib/db/readCache";
 import { getCompatibleFallbackModels } from "@/lib/providers/managedAvailableModels";
+import { providerUsesCuratedModelsOnly } from "@/lib/providers/modelListingCapability";
 import { getOpenRouterCatalog } from "@/lib/catalog/openrouterCatalog";
 import { hasEligibleConnectionForModel } from "@/domain/connectionModelRules";
 import {
@@ -52,7 +62,6 @@ import {
   isNoAuthRawProviderPrefix,
   normalizeBlockedProviderSet,
 } from "@/shared/utils/noAuthProviders";
-import { parseModel } from "@omniroute/open-sse/services/model";
 import { getTokenLimit } from "@omniroute/open-sse/services/contextManager";
 import { extractApiKey } from "@/sse/services/auth";
 import type { ComboModelStep } from "@/lib/combos/steps";
@@ -65,6 +74,8 @@ import {
   intersectStringArrays,
   minKnownNumber,
   maybeOmitCatalogModelName,
+  getThinkingCapabilityFields,
+  mergeComboCapabilities,
 } from "./catalogHelpers";
 import {
   qualifyOpenRouterModelId,
@@ -74,9 +85,16 @@ import {
   getOpenRouterDisplayName,
 } from "./catalogOpenrouter";
 import { getVisionCapabilityFields, getCustomVisionCapabilityFields } from "./catalogVision";
-import { FALLBACK_ALIAS_TO_PROVIDER, buildAliasMaps } from "./catalogProviderMaps";
+import {
+  buildAliasMaps,
+  prefixRoutesToProvider,
+  resolveCanonicalProviderId as resolveCanonicalProviderIdFromMaps,
+  getProviderPrefixes as getProviderPrefixesFromMaps,
+  getComboTargetModelId as getComboTargetModelIdFromMaps,
+} from "./catalogProviderMaps";
 import { getModelCatalogAuthRejection, isCodexModelCatalogClient } from "./catalogRequest";
 import { isFreeModel, providerHasFreeModels } from "@/shared/utils/freeModels";
+import { isCodexDiscoveryModelExcluded } from "@/shared/services/codexDiscoveryPolicy";
 
 // Public API of this module is preserved after the catalog helper extraction:
 // `isVisionModelId` (vision-detection-consistency.test.ts) and
@@ -101,7 +119,7 @@ type CachedCatalog = {
   status: number;
   expiresAt: number;
 };
-const CATALOG_CACHE_TTL_MS = 1500; // ~one request-latency window; safe vs SDK bursts
+const CATALOG_CACHE_TTL_MS_DEFAULT = 1500; // fallback; overridden by settings
 const catalogCache = new Map<string, CachedCatalog>();
 const catalogInFlight = new Map<string, Promise<CachedCatalog>>();
 
@@ -124,7 +142,8 @@ function buildCatalogCacheKey(request: Request): string {
   const prefix = url.searchParams.get("prefix") || "";
   const apiKey = extractApiKey(request) || "";
   const isCodex = isCodexModelCatalogClient(request) ? "1" : "0";
-  return `${prefix}|${isCodex}|${apiKey}`;
+  const configuredOnly = url.searchParams.get("configuredOnly") === "true" ? "1" : "0";
+  return `${prefix}|${isCodex}|${apiKey}|${configuredOnly}`;
 }
 
 // Tracks the model-catalog cache version (src/lib/db/readCache.ts) as of the last
@@ -202,7 +221,6 @@ export async function getUnifiedModelsResponse(
       headers: mergeCatalogHeaders(corsHeaders, cached.headers, diagnosticHeaders),
     });
   }
-
   let inflight = catalogInFlight.get(cacheKey);
   if (!inflight) {
     inflight = buildCatalogPayload(request).then((payload) => {
@@ -210,7 +228,7 @@ export async function getUnifiedModelsResponse(
         body: payload.body,
         headers: payload.headers,
         status: payload.status,
-        expiresAt: Date.now() + CATALOG_CACHE_TTL_MS,
+        expiresAt: Date.now() + payload.cacheTTL,
       });
       return payload;
     });
@@ -242,7 +260,7 @@ export async function getUnifiedModelsResponse(
 
 async function buildCatalogPayload(
   request: Request
-): Promise<{ body: string; headers: Record<string, string>; status: number }> {
+): Promise<{ body: string; headers: Record<string, string>; status: number; cacheTTL: number }> {
   _catalogBuilderRuns++;
   const built = await buildUnifiedModelsResponseCore(request);
   const body = await built.text();
@@ -250,13 +268,16 @@ async function buildCatalogPayload(
   built.headers.forEach((value, key) => {
     headers[key] = value;
   });
-  // buildUnifiedModelsResponseCore() itself returns a real error Response (status 500)
-  // when the builder crashes (e.g. a DB read throws) instead of throwing — status must
-  // be captured and replayed through the cache/coalescing wrapper above, otherwise the
-  // caller-facing Response (built with a fresh `new Response(...)`, defaulting to 200)
-  // silently downgrades a genuine server error into an HTTP 200 with an `error`-shaped
-  // JSON body.
-  return { body, headers, status: built.status };
+  // Read the configurable cache TTL from database settings.
+  // Falls back to the hardcoded default if not set or on error.
+  let cacheTTL = CATALOG_CACHE_TTL_MS_DEFAULT;
+  try {
+    const dbSettings = await getDatabaseSettings();
+    cacheTTL = dbSettings.cache?.modelCatalogCacheTtlMs ?? CATALOG_CACHE_TTL_MS_DEFAULT;
+  } catch {
+    // Swallow — use default TTL on DB error
+  }
+  return { body, headers, status: built.status, cacheTTL };
 }
 
 /**
@@ -285,11 +306,8 @@ async function buildUnifiedModelsResponseCore(
     const includeAlias = prefixMode !== "canonical";
     const includeCanonical = prefixMode !== "alias";
     const resolveCanonicalProviderId = (aliasOrProviderId: string, fallbackProviderId?: string) =>
-      aliasToProviderId[aliasOrProviderId] ||
-      (fallbackProviderId ? aliasToProviderId[fallbackProviderId] : undefined) ||
-      FALLBACK_ALIAS_TO_PROVIDER[aliasOrProviderId] ||
-      fallbackProviderId ||
-      aliasOrProviderId;
+      resolveCanonicalProviderIdFromMaps(aliasToProviderId, aliasOrProviderId, fallbackProviderId);
+    const aliasMaps = { aliasToProviderId, providerIdToAlias };
     // Issue #96: Allow blocking specific providers from the models list
     const blockedProviders = normalizeBlockedProviderSet(settings.blockedProviders);
     // #6316: Opt-in filter — hide paid-only models via `isFreeModel()`. Only applied to
@@ -310,7 +328,7 @@ async function buildUnifiedModelsResponseCore(
     let connections = [];
     let totalConnectionCount = 0; // Track if DB has ANY connections (even disabled)
     try {
-      connections = await getProviderConnections();
+      connections = (await getCachedRawProviderConnections()).map(createLazyConnectionView);
       totalConnectionCount = connections.length;
       // Filter to only active connections
       connections = connections.filter((c) => c.isActive !== false);
@@ -322,7 +340,7 @@ async function buildUnifiedModelsResponseCore(
     // Get provider nodes (for compatible providers with custom prefixes)
     let providerNodes = [];
     try {
-      providerNodes = await getProviderNodes();
+      providerNodes = await getCachedProviderNodes();
     } catch (e) {
       console.log("Could not fetch provider nodes");
     }
@@ -407,42 +425,14 @@ async function buildUnifiedModelsResponseCore(
       return providerModels.find((model) => model?.id === modelId) || null;
     };
 
-    const prefixRoutesToProvider = (prefix: string, providerId: string) => {
-      const parsed = parseModel(`${prefix}/__omniroute_probe__`);
-      return parsed.provider === providerId;
-    };
+    // prefixRoutesToProvider is imported directly from catalogProviderMaps.ts (no
+    // map dependency — pure parseModel() probe), used both here and at the two
+    // includeCanonical prefix-collision checks below.
+    const getProviderPrefixes = (providerId: string, rawProvider: string) =>
+      getProviderPrefixesFromMaps(aliasMaps, providerId, rawProvider);
 
-    const getProviderPrefixes = (providerId: string, rawProvider: string) => {
-      const prefixes = new Set<string>([providerId, rawProvider, providerIdToAlias[providerId]]);
-      for (const [alias, mappedProviderId] of Object.entries(aliasToProviderId)) {
-        if (mappedProviderId === providerId) prefixes.add(alias);
-      }
-      return [...prefixes].filter(
-        (prefix): prefix is string =>
-          typeof prefix === "string" &&
-          prefix.length > 0 &&
-          prefixRoutesToProvider(prefix, providerId)
-      );
-    };
-
-    const getComboTargetModelId = (target: ComboCatalogTarget) => {
-      const rawProvider = typeof target.provider === "string" ? target.provider.trim() : "";
-      const modelStr = typeof target.modelStr === "string" ? target.modelStr.trim() : "";
-      if (!rawProvider || rawProvider === "unknown" || !modelStr) return null;
-
-      const providerId = resolveCanonicalProviderId(rawProvider);
-      if (!providerId || providerId === "unknown") return null;
-
-      for (const prefix of getProviderPrefixes(providerId, rawProvider)) {
-        const prefixWithSlash = `${prefix}/`;
-        if (modelStr.startsWith(prefixWithSlash)) {
-          const modelId = modelStr.slice(prefixWithSlash.length).trim();
-          return modelId ? { providerId, modelId } : null;
-        }
-      }
-
-      return { providerId, modelId: modelStr };
-    };
+    const getComboTargetModelId = (target: ComboCatalogTarget) =>
+      getComboTargetModelIdFromMaps(aliasMaps, target);
 
     const getComboTargetCatalogMetadata = (
       target: ComboCatalogTarget
@@ -524,32 +514,25 @@ async function buildUnifiedModelsResponseCore(
             ? ["text"]
             : undefined;
 
-      const capabilities: Record<string, boolean> = {};
-      if (typeof synced?.tool_call === "boolean") {
-        capabilities.tool_calling = synced.tool_call;
-      } else if (typeof registryModel?.toolCalling === "boolean") {
-        capabilities.tool_calling = registryModel.toolCalling;
-      } else if (typeof spec?.supportsTools === "boolean") {
-        capabilities.tool_calling = spec.supportsTools;
+      const capabilities: Record<string, boolean | string[]> = {};
+      capabilities.tool_calling = canonical.capabilities.toolCalling;
+      capabilities.reasoning = canonical.capabilities.reasoning;
+      if (typeof canonical.capabilities.vision === "boolean") {
+        capabilities.vision = canonical.capabilities.vision;
       }
-      if (typeof synced?.reasoning === "boolean") {
-        capabilities.reasoning = synced.reasoning;
-      } else if (typeof registryModel?.supportsReasoning === "boolean") {
-        capabilities.reasoning = registryModel.supportsReasoning;
-      } else if (typeof spec?.supportsThinking === "boolean") {
-        capabilities.reasoning = spec.supportsThinking;
+      if (typeof canonical.capabilities.attachment === "boolean") {
+        capabilities.attachment = canonical.capabilities.attachment;
       }
-      if (typeof knownVision === "boolean") capabilities.vision = knownVision;
-      if (typeof synced?.attachment === "boolean") capabilities.attachment = synced.attachment;
-      if (typeof synced?.structured_output === "boolean") {
-        capabilities.structured_output = synced.structured_output;
+      if (typeof canonical.capabilities.structuredOutput === "boolean") {
+        capabilities.structured_output = canonical.capabilities.structuredOutput;
       }
-      if (typeof synced?.temperature === "boolean") capabilities.temperature = synced.temperature;
-      if (typeof synced?.reasoning === "boolean") {
-        capabilities.thinking = synced.reasoning;
-      } else if (typeof spec?.supportsThinking === "boolean") {
-        capabilities.thinking = spec.supportsThinking;
+      if (typeof canonical.capabilities.temperature === "boolean") {
+        capabilities.temperature = canonical.capabilities.temperature;
       }
+      Object.assign(
+        capabilities,
+        getThinkingCapabilityFields(providerId, modelId, canonical.capabilities.supportsThinking)
+      );
 
       return {
         ...(contextLength ? { contextLength } : {}),
@@ -601,22 +584,7 @@ async function buildUnifiedModelsResponseCore(
         ? intersectStringArrays(knownMetadata.map((metadata) => metadata.outputModalities || []))
         : [];
 
-      const capabilities: Record<string, boolean> = {};
-      for (const key of [
-        "tool_calling",
-        "reasoning",
-        "vision",
-        "attachment",
-        "structured_output",
-        "temperature",
-        "thinking",
-      ]) {
-        const values = knownMetadata.map((metadata) => metadata.capabilities[key]);
-        if (values.every((value): value is boolean => typeof value === "boolean")) {
-          const [first] = values;
-          if (values.every((value) => value === first)) capabilities[key] = first;
-        }
-      }
+      const capabilities = mergeComboCapabilities(knownMetadata);
 
       return {
         ...baseMetadata,
@@ -649,6 +617,11 @@ async function buildUnifiedModelsResponseCore(
       ...AUTO_FAMILY_IDS,
     ]) {
       if (blockedProviders.has("auto") || listedIds.has(autoId)) continue; // #5192
+      // #6328 (follow-up to #6495 / #6512): REMOVE — not just hide — paid-tier
+      // auto/* ids (auto/pro-* + auto/*:pro) from the advertised catalog when the
+      // operator opts into hidePaidModels. The candidate-pool filter in
+      // virtualFactory (#6512) still gates request-time routing for the rest.
+      if (hidePaid && isPaidTierAutoId(autoId)) continue;
       listedIds.add(autoId);
       const baseAutoEntry = {
         id: autoId,
@@ -726,6 +699,7 @@ async function buildUnifiedModelsResponseCore(
     }
     const providersWithSyncedModels = new Set(
       Object.keys(syncedModelsByProvider).filter((pid) => {
+        if (providerUsesCuratedModelsOnly(pid)) return false;
         const models = syncedModelsByProvider[pid];
         return Array.isArray(models) && models.length > 0;
       })
@@ -754,7 +728,8 @@ async function buildUnifiedModelsResponseCore(
         if (!providerSupportsModel(canonicalProviderId, model.id)) continue;
         const aliasId = `${alias}/${model.id}`;
         if (getModelIsHidden(canonicalProviderId, model.id)) continue;
-        if (shouldHidePaid(canonicalProviderId, model.id, (model as any).pricing)) continue;
+        if (shouldHidePaid(canonicalProviderId, model.id, (model as { pricing?: unknown }).pricing))
+          continue;
 
         const visionFields =
           getVisionCapabilityFields(aliasId) || getVisionCapabilityFields(model.id);
@@ -822,6 +797,7 @@ async function buildUnifiedModelsResponseCore(
 
     try {
       for (const [providerId, syncedModels] of Object.entries(syncedModelsByProvider)) {
+        if (providerUsesCuratedModelsOnly(providerId)) continue;
         if (!Array.isArray(syncedModels) || syncedModels.length === 0) continue;
         if (blockedProviders.has(providerId)) continue;
         if (providerId === "reka") continue;
@@ -842,7 +818,34 @@ async function buildUnifiedModelsResponseCore(
 
         for (const sm of syncedModels) {
           if (!providerSupportsModel(canonicalProviderId, sm.id)) continue;
+          if (canonicalProviderId === "codex" && isCodexDiscoveryModelExcluded(sm)) {
+            continue;
+          }
           if (getModelIsHidden(providerId, sm.id)) continue;
+          // #6457: some upstream discovery catalogs (e.g. HuggingFace's live
+          // `/v1/models`) return image/diffusion models with no modality info,
+          // so `endpoints` below would default to ["chat"] and misrepresent
+          // them as chat-capable. Skip a registered image model only when its
+          // synced metadata does not explicitly advertise a chat endpoint.
+          // Multi-capability models may intentionally share an id between the
+          // chat and image catalogs; getAllImageModels() adds the image entry.
+          const explicitlySupportsChat = sm.supportedEndpoints?.some(
+            (endpoint) => endpoint === "chat" || endpoint === "responses"
+          );
+          if (
+            !explicitlySupportsChat &&
+            (isRegisteredImageModel(canonicalProviderId, sm.id) ||
+              isRegisteredImageModel(providerId, sm.id))
+          ) {
+            continue;
+          }
+          // #6328: apply hidePaidModels to synced provider rows too. Synced rows
+          // rarely carry pricing metadata, so shouldHidePaid() falls through to
+          // the FREE_MODEL_IDS_BY_PROVIDER catalog — providers with a curated
+          // free roster show only those; providers with none fall through to
+          // hide-all via providerHasFreeModels() === false.
+          if (shouldHidePaid(canonicalProviderId, sm.id, (sm as { pricing?: unknown }).pricing))
+            continue;
 
           const registryEntry = REGISTRY[providerId];
           const displayModelId =
@@ -869,22 +872,14 @@ async function buildUnifiedModelsResponseCore(
             ...(endpoints.length > 1 || !endpoints.includes("chat")
               ? { supported_endpoints: endpoints }
               : {}),
-            // #4264: surface the vision flag captured at sync time so imported
-            // image-capable models (e.g. OpenRouter) aren't shown as text-only.
-            ...(sm.supportsVision ? { capabilities: { vision: true } } : {}),
+            // #4264/#7694: vision + reasoning-effort-tier flags captured at sync time,
+            // merged into a single capabilities object (see ./syncedCapabilities.ts).
+            ...(buildSyncedCapabilities(sm) ? { capabilities: buildSyncedCapabilities(sm) } : {}),
           };
 
           const existingAliasModel = models.find((model) => model.id === aliasId);
           if (existingAliasModel) {
-            // Merge (not clobber) capabilities so syncing a vision flag onto a
-            // registry/combo model that already declares other capabilities keeps both.
-            const mergedCapabilities =
-              sm.supportsVision || existingAliasModel.capabilities
-                ? {
-                    ...(existingAliasModel.capabilities || {}),
-                    ...(sm.supportsVision ? { vision: true } : {}),
-                  }
-                : undefined;
+            const mergedCapabilities = mergeSyncedCapabilities(existingAliasModel.capabilities, sm);
             Object.assign(existingAliasModel, syncedFields);
             if (mergedCapabilities) existingAliasModel.capabilities = mergedCapabilities;
             continue;
@@ -1050,7 +1045,9 @@ async function buildUnifiedModelsResponseCore(
     // Add embedding models (filtered by active providers)
     for (const embModel of getAllEmbeddingModels()) {
       if (!isProviderActive(embModel.provider)) continue;
-      const rawModelId = embModel.id.split("/").pop() || embModel.id;
+      const rawModelId = embModel.id.startsWith(`${embModel.provider}/`)
+        ? embModel.id.slice(embModel.provider.length + 1)
+        : embModel.id;
       if (!providerSupportsModel(embModel.provider, rawModelId)) continue;
       if (getModelIsHidden(embModel.provider, rawModelId)) continue;
       if (hasEquivalentSpecialtyModel(embModel.provider, rawModelId, "embedding", embModel.id)) {
@@ -1170,6 +1167,7 @@ async function buildUnifiedModelsResponseCore(
     try {
       const customModelsMap = (await getAllCustomModels()) as Record<string, unknown>;
       for (const [providerId, rawProviderCustomModels] of Object.entries(customModelsMap)) {
+        if (providerUsesCuratedModelsOnly(providerId)) continue;
         // Skip Gemini — handled by syncedAvailableModels above
         if (providerId === "gemini") continue;
         if (providerId === "reka") continue;
@@ -1200,6 +1198,13 @@ async function buildUnifiedModelsResponseCore(
           if (!modelId) continue;
           if (model.isHidden === true) continue;
           if (getModelIsHidden(canonicalProviderId, modelId)) continue;
+          // #6328: apply hidePaidModels to user-defined custom rows too.
+          // Custom entries do not carry pricing, so shouldHidePaid() decides
+          // via FREE_MODEL_IDS_BY_PROVIDER — matches synced/PROVIDER_MODELS.
+          if (
+            shouldHidePaid(canonicalProviderId, modelId, (model as { pricing?: unknown }).pricing)
+          )
+            continue;
           // noAuth providers have no connection rows; keep auth providers gated. (#2798/#3200)
           const isNoAuthProvider = isNoAuthProviderKey(canonicalProviderId, providerId, alias);
           if (
@@ -1325,6 +1330,10 @@ async function buildUnifiedModelsResponseCore(
         }
 
         if (getModelIsHidden(canonicalProviderId, modelId)) continue;
+        // #6328: apply hidePaidModels to alias-backed rows too. Alias mappings
+        // point at providerKey/modelId with no pricing, so shouldHidePaid()
+        // decides via the FREE_MODEL_IDS_BY_PROVIDER catalog tier.
+        if (shouldHidePaid(canonicalProviderId, modelId)) continue;
 
         const aliasId = `${alias}/${modelId}`;
         const rawPrefixedId = `${providerKey}/${modelId}`;
@@ -1393,6 +1402,11 @@ async function buildUnifiedModelsResponseCore(
         const modelId = typeof model.id === "string" ? model.id : null;
         if (!modelId) continue;
         if (getModelIsHidden(canonicalProviderId, modelId)) continue;
+        // #6328: apply hidePaidModels to managed-fallback rows too. Compatible
+        // provider fallbacks lack pricing; shouldHidePaid() decides via the
+        // FREE_MODEL_IDS_BY_PROVIDER catalog tier.
+        if (shouldHidePaid(canonicalProviderId, modelId, (model as { pricing?: unknown }).pricing))
+          continue;
         if (!hasEligibleConnectionForModel([conn], modelId)) continue;
 
         const aliasId = `${alias}/${modelId}`;
@@ -1458,6 +1472,25 @@ async function buildUnifiedModelsResponseCore(
         finalModels = filtered;
       }
     }
+    // ?configuredOnly — hide models that have no eligible DB connection.
+    // Applied after the API-key filter so the key filter runs first, then
+    // variants are only generated for surviving models.
+    if (new URL(request.url).searchParams.get("configuredOnly") === "true") {
+      finalModels = finalModels.filter((m) => {
+        if (!m.root) return true;
+        return hasEligibleConnectionForModel(connections, m.root);
+      });
+    }
+
+    // Advertise Claude reasoning-effort variants (claude/<model>-{low,medium,high[,xhigh]}).
+    // Derived from the already key-filtered list so a variant only appears when its real
+    // model is permitted. Runs before the no-thinking pass: the gateway already routes these
+    // suffixed ids (claudeEffortVariant.ts), this just makes them selectable in catalog-only
+    // clients (OpenCode) that can't set a reasoning_effort config the way VS Code does.
+    finalModels = appendClaudeEffortVariants(
+      finalModels,
+      prefixMode === "canonical" ? aliasToProviderId : undefined
+    );
 
     // Advertise no-thinking gateway variants (Fase 8.1). Derived from the already
     // key-filtered list, so a variant only appears when its real model is permitted.
@@ -1465,6 +1498,11 @@ async function buildUnifiedModelsResponseCore(
       finalModels,
       prefixMode === "canonical" ? aliasToProviderId : undefined
     );
+
+    // #7694: advertise `<provider>/<model>-<tier>` variants for synced models that
+    // captured `reasoning.supported_efforts` at sync time (capabilities.effort_tiers).
+    // Derived from the already key-filtered list; skips codex/kimi (own suffix mechanism).
+    finalModels = appendSyncedEffortVariants(finalModels);
 
     // #4424 follow-up — drop exact-duplicate ids that slip through the per-source push
     // guards (e.g. `codex/gpt-5.5`, `veo-free/seedance` listed twice). Keyed by listing
